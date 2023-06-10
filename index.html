@@ -6,7 +6,7 @@
 <body>
   <h2>Baked Credit Form</h2>
   
-  <form  name="budcredit" method="POST" netlify>
+  <form  name="budcredit" method="POST" data-netlify="true">
     <fieldset>
       <legend>Customer Information</legend>
       <label for="name">Name:</label>
@@ -39,7 +39,7 @@
     <button type="submit">Submit</button>
   </form>
   
-  <script>
+<!--  <script>
     document.querySelector('form').addEventListener('submit', function(e) {
       e.preventDefault();
       
@@ -72,6 +72,6 @@
       document.getElementById('cost').value = '';
       document.getElementById('remaining').value = '';
     });
-  </script>
+  </script> -->
 </body>
 </html>
