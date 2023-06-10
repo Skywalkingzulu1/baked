@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Bud Credit Form</title>
+</head>
+<body>
+  <h2>Bud Credit Form</h2>
+  
+  <form>
+    <fieldset>
+      <legend>Customer Information</legend>
+      <label for="name">Name:</label>
+      <input type="text" id="name" name="name" required><br><br>
+      
+      <label for="address">Address:</label>
+      <input type="text" id="address" name="address" required><br><br>
+      
+      <label for="phone">Phone Number:</label>
+      <input type="tel" id="phone" name="phone" required pattern="[0-9]{10}"><br><br>
+    </fieldset>
+    
+    <fieldset>
+      <legend>Credit Details</legend>
+      <label for="date">Date:</label>
+      <input type="date" id="date" name="date" required><br><br>
+      
+      <label for="cost">Joint Cost (ZAR):</label>
+      <input type="number" id="cost" name="cost" min="0" required><br><br>
+      
+      <label for="remaining">Remaining Credit (ZAR):</label>
+      <input type="number" id="remaining" name="remaining" min="0" max="500" required><br><br>
+    </fieldset>
+    
+    <fieldset>
+      <legend>Previous Credit</legend>
+      <textarea id="previous" name="previous" rows="4" cols="50" readonly></textarea><br><br>
+    </fieldset>
+    
+    <button type="submit">Submit</button>
+  </form>
+  
+  <script>
+    document.querySelector('form').addEventListener('submit', function(e) {
+      e.preventDefault();
+      
+      var name = document.getElementById('name').value;
+      var address = document.getElementById('address').value;
+      var phone = document.getElementById('phone').value;
+      var date = document.getElementById('date').value;
+      var cost = document.getElementById('cost').value;
+      var remaining = document.getElementById('remaining').value;
+      
+      // Convert the cost and remaining credit to decimal values
+      var costDecimal = parseFloat(cost).toFixed(2);
+      var remainingDecimal = parseFloat(remaining).toFixed(2);
+      
+      // Check if the remaining credit exceeds the credit limit
+      if (remainingDecimal > 500.00) {
+        alert('The remaining credit cannot exceed R500.00');
+        return;
+      }
+      
+      // Store the credit request and update previous credit display
+      var previous = document.getElementById('previous');
+      previous.value += `Date: ${date}\nJoint Cost: ZAR ${costDecimal}\nRemaining Credit: ZAR ${remainingDecimal}\n\n`;
+      
+      // Clear the form fields for the next entry
+      document.getElementById('name').value = '';
+      document.getElementById('address').value = '';
+      document.getElementById('phone').value = '';
+      document.getElementById('date').value = '';
+      document.getElementById('cost').value = '';
+      document.getElementById('remaining').value = '';
+    });
+  </script>
+</body>
+</html>
