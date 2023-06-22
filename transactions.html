@@ -63,7 +63,7 @@
         const transactions = {};
 
         rows.forEach(row => {
-          const columns = row.split(';');
+          const columns = row.split(',');
           const name = columns[0];
           const address = columns[1];
           const phone = columns[2];
