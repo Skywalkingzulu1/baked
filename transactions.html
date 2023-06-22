@@ -2,7 +2,39 @@
 <html>
 <head>
   <title>Bud Credit Transactions</title>
-  <link rel="stylesheet" href="styles.css">
+  <style>
+    body {
+      background: linear-gradient(135deg, #ffe7a6, #ffbb7b);
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 20px;
+    }
+
+    h2 {
+      text-align: center;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 20px;
+    }
+
+    th, td {
+      padding: 10px;
+      text-align: left;
+      border-bottom: 1px solid #ddd;
+    }
+
+    th {
+      background-color: #f5f5f5;
+      font-weight: bold;
+    }
+
+    tbody tr:hover {
+      background-color: #f5f5f5;
+    }
+  </style>
 </head>
 <body>
   <h2>Bud Credit Transactions</h2>
@@ -14,7 +46,7 @@
         <th>Address</th>
         <th>Phone Number</th>
         <th>Date</th>
-        <th>Cost (ZAR)</th>
+        <th>Total Cost (ZAR)</th>
         <th>Remaining Credit (ZAR)</th>
       </tr>
     </thead>
@@ -28,27 +60,48 @@
       .then(response => response.text())
       .then(csvData => {
         const rows = csvData.split('\n');
+        const transactions = {};
+
         rows.forEach(row => {
           const columns = row.split(',');
           const name = columns[0];
           const address = columns[1];
           const phone = columns[2];
           const date = columns[3];
-          const cost = columns[4];
-          const remaining = columns[5];
+          const cost = parseFloat(columns[4]);
+          const remaining = parseFloat(columns[5]);
 
-          const transactionRow = document.createElement('tr');
-          transactionRow.innerHTML = `
-            <td>${name}</td>
-            <td>${address}</td>
-            <td>${phone}</td>
-            <td>${date}</td>
-            <td>${cost}</td>
-            <td>${remaining}</td>
-          `;
-
-          document.querySelector('tbody').appendChild(transactionRow);
+          const key = `${name}-${address}`;
+          if (transactions.hasOwnProperty(key)) {
+            transactions[key].totalCost += cost;
+          } else {
+            transactions[key] = {
+              name: name,
+              address: address,
+              totalCost: cost,
+              phone: phone,
+              date: date,
+              remaining: remaining
+            };
+          }
         });
+
+        for (const key in transactions) {
+          if (transactions.hasOwnProperty(key)) {
+            const transaction = transactions[key];
+            const transactionRow = document.createElement('tr');
+            transactionRow.innerHTML = `
+              <td>${transaction.name}</td>
+              <td>${transaction.address}</td>
+              <td>${transaction.phone}</td>
+              <td>${transaction.date}</td>
+              <td>${transaction.totalCost.toFixed(2)}</td>
+              <td>${transaction.remaining.toFixed(2)}</td>
+            `;
+
+            document.querySelector('tbody').appendChild(transactionRow);
+          }
+        }
       })
       .catch(error => {
         console.error('Error fetching CSV file:', error);
