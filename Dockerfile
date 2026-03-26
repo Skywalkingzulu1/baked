@@ -1,22 +1,9 @@
-FROM python:3.11-slim
+FROM nginx:alpine
 
-# Set working directory
-WORKDIR /app
+# Copy all static site files (HTML, data files, images, etc.) into Nginx's default serving directory
+COPY . /usr/share/nginx/html
 
-# Install system dependencies (if any) and clean up
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential \
-        && rm -rf /var/lib/apt/lists/*
+# Expose the default HTTP port
+EXPOSE 80
 
-# Install Python dependencies
-COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy application files
-COPY . ./
-
-# Expose the port the app will run on
-EXPOSE 8000
-
-# Use a simple HTTP server to serve static files
-CMD ["python", "-m", "http.server", "8000"]
+# The default command for the nginx:alpine image already starts Nginx in the foreground, so no additional CMD is required.
