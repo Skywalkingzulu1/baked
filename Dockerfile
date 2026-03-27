@@ -1,37 +1,17 @@
-# ------------------------------------------------------------
-# Multi‑stage Dockerfile for building and serving the static site
-# ------------------------------------------------------------
-
-# ---------- Builder Stage ----------
-# Using a lightweight Alpine image as the build environment.
-# For a pure static site there is no compilation step,
-# but this stage allows future extensions (e.g., npm build).
-FROM alpine:3.20 AS builder
+FROM python:3.11-slim
 
 # Set working directory
-WORKDIR /src
+WORKDIR /app
 
-# Copy the entire project (HTML, assets, etc.) into the builder.
-COPY . .
+# Copy requirements and install dependencies
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
 
-# If a build step is required (e.g., npm run build), it would be added here.
-# For now we simply retain the source files as‑is.
+# Copy the static HTML file
+COPY index.html ./
 
+# Expose the default port for a simple HTTP server
+EXPOSE 8000
 
-# ---------- Production Stage ----------
-# Use the official lightweight Nginx image to serve the site.
-FROM nginx:alpine
-
-# Copy the built static files from the builder stage into Nginx's
-# default document root.
-COPY --from=builder /src /usr/share/nginx/html
-
-# Copy the custom Nginx configuration that adds caching headers
-# and enables HTTPS support.
-COPY nginx.conf /etc/nginx/conf.d/default.conf
-
-# Expose HTTP and HTTPS ports.
-EXPOSE 80 443
-
-# Run Nginx in the foreground.
-CMD ["nginx", "-g", "daemon off;"]
+# Use Python's built-in HTTP server to serve the static site
+CMD ["python", "-m", "http.server", "8000"]
