@@ -1,9 +1,7 @@
-version: "3.9"
+version: "3.8"
 
 services:
   web:
-    build: .
-    ports:
-      - "8000:8000"
-    restart: unless-stopped
-    # In production you might want to serve via a reverse proxy (e.g., nginx) or use a more robust server.
+    build:
+      context: ./web
+      docker
