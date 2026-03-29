@@ -5,6 +5,8 @@ import json
 from datetime import datetime
 from flask import Flask, request, send_from_directory, jsonify, abort
 from dotenv import load_dotenv
+import psycopg2
+from psycopg2.extras import RealDictCursor
 
 # ----------------------------------------------------------------------
 # Load environment variables
@@ -15,6 +17,54 @@ load_dotenv()
 # Flask app configuration
 # ----------------------------------------------------------------------
 app = Flask(__name__, static_folder='static', static_url_path='')
+
+# ----------------------------------------------------------------------
+# Database configuration
+# ----------------------------------------------------------------------
+DB_HOST = os.getenv('DB_HOST', 'localhost')
+DB_PORT = os.getenv('DB_PORT', '5432')
+DB_NAME = os.getenv('DB_NAME', 'bud_credit')
+DB_USER = os.getenv('DB_USER', 'postgres')
+DB_PASSWORD = os.getenv('DB_PASSWORD', '')
+
+def get_db_connection():
+    """Create a new database connection."""
+    conn = psycopg2.connect(
+        host=DB_HOST,
+        port=DB_PORT,
+        dbname=DB_NAME,
+        user=DB_USER,
+        password=DB_PASSWORD,
+        cursor_factory=RealDictCursor
+    )
+    return conn
+
+def init_db():
+    """Initialize the submissions table if it does not exist."""
+    create_table_sql = """
+    CREATE TABLE IF NOT EXISTS submissions (
+        id SERIAL PRIMARY KEY,
+        name TEXT NOT NULL,
+        email TEXT,
+        address TEXT NOT NULL,
+        phone VARCHAR(10) NOT NULL,
+        submission_date DATE NOT NULL,
+        cost NUMERIC CHECK (cost >= 0 AND cost <= 500),
+        remaining NUMERIC CHECK (remaining >= 0 AND remaining <= 500),
+        previous TEXT,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    );
+    """
+    conn = get_db_connection()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(create_table_sql)
+    finally:
+        conn.close()
+
+# Initialize DB on startup
+init_db()
 
 # ----------------------------------------------------------------------
 # Helper utilities
@@ -93,7 +143,7 @@ def validate_form(data: dict):
     # ---------- Previous (optional, read‑only) ----------
     previous = sanitize_input(data.get('previous', ''))
     if len(previous) > 2000:
-        errors['previous'] = 'Previous field exceeds maximum allowed length (2000 characters).'
+        errors['previous'] = 'Previous field exceeds maximum allowed length.'
     sanitized['previous'] = previous
 
     return sanitized, errors
@@ -103,46 +153,73 @@ def validate_form(data: dict):
 # ----------------------------------------------------------------------
 @app.route('/', methods=['GET'])
 def serve_index():
-    """
-    Serve the main page (index.html).
-    """
+    """Serve the main page."""
     return send_from_directory(app.static_folder, 'index.html')
 
 @app.route('/health', methods=['GET'])
 def health_check():
-    """
-    Simple health‑check endpoint.
-    """
+    """Simple health check endpoint."""
     return jsonify({'status': 'ok'}), 200
 
 @app.route('/submit', methods=['POST'])
 def submit_form():
     """
-    Validate, sanitize and process the credit form submission.
-    Returns JSON with either success data or detailed error messages.
+    Validate, sanitize, store the form data, and return a JSON response.
     """
+    # Flask parses form data into ImmutableMultiDict; convert to regular dict
+    form_data = request.form.to_dict()
+    sanitized, errors = validate_form(form_data)
+
+    if errors:
+        return jsonify({'status': 'error', 'errors': errors}), 400
+
+    # Insert sanitized data into the database
+    insert_sql = """
+    INSERT INTO submissions
+        (name, email, address, phone, submission_date, cost, remaining, previous)
+    VALUES
+        (%s, %s, %s, %s, %s, %s, %s, %s)
+    RETURNING id, created_at;
+    """
+    conn = get_db_connection()
     try:
-        # Flask's request.form provides a MultiDict; convert to a regular dict for validation
-        form_data = request.form.to_dict()
-        sanitized, errors = validate_form(form_data)
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    insert_sql,
+                    (
+                        sanitized['name'],
+                        sanitized['email'] or None,
+                        sanitized['address'],
+                        sanitized['phone'],
+                        sanitized['date'],
+                        sanitized['cost'],
+                        sanitized['remaining'],
+                        sanitized['previous']
+                    )
+                )
+                result = cur.fetchone()
+                submission_id = result['id']
+                created_at = result['created_at']
+    finally:
+        conn.close()
 
-        if errors:
-            # Return a 400 Bad Request with error details
-            return jsonify({'status': 'error', 'errors': errors}), 400
-
-        # In a real application you would persist `sanitized` securely (e.g., parameterised DB query)
-        # For this task we simply echo the sanitized data back to the client.
-        return jsonify({'status': 'success', 'data': sanitized}), 200
-
-    except Exception as e:
-        # Log the exception in a real-world scenario; here we return a generic error.
-        return jsonify({'status': 'error', 'message': 'Internal server error.'}), 500
+    response_payload = {
+        'status': 'success',
+        'data': {
+            'id': submission_id,
+            'created_at': created_at.isoformat(),
+            **sanitized
+        }
+    }
+    return jsonify(response_payload), 201
 
 # ----------------------------------------------------------------------
-# Application entry point
+# Entry point
 # ----------------------------------------------------------------------
 if __name__ == '__main__':
-    # Bind to all interfaces for containerised environments
-    host = os.getenv('FLASK_RUN_HOST', '0.0.0.0')
-    port = int(os.getenv('FLASK_RUN_PORT', '5000'))
-    app.run(host=host, port=port, debug=False)
+    # Use host and port from environment or defaults
+    host = os.getenv('FLASK_HOST', '0.0.0.0')
+    port = int(os.getenv('FLASK_PORT', '5000'))
+    debug = os.getenv('FLASK_DEBUG', 'false').lower() == 'true'
+    app.run(host=host, port=port, debug=debug)
