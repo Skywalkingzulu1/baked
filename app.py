@@ -1,4 +1,4 @@
-from flask import Flask, request, send_from_directory, jsonify, send_file
+from flask import Flask, request, send_from_directory, jsonify
 import os
 import re
 import html
@@ -7,7 +7,9 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
 
-# Load environment variables from a .env file if present
+# ----------------------------------------------------------------------
+# Load environment variables
+# ----------------------------------------------------------------------
 load_dotenv()
 
 app = Flask(__name__, static_folder='static', static_url_path='')
@@ -21,8 +23,9 @@ DB_NAME = os.getenv('DB_NAME', 'bud_credit')
 DB_USER = os.getenv('DB_USER', 'postgres')
 DB_PASSWORD = os.getenv('DB_PASSWORD', '')
 
-# Simple token‑based authentication for the API endpoint
+# Simple token‑based authentication for the API endpoint (optional)
 API_TOKEN = os.getenv('API_TOKEN', 'changeme')  # replace with a strong secret
+
 
 # ----------------------------------------------------------------------
 # Helper utilities
@@ -38,31 +41,40 @@ def get_db_connection():
         cursor_factory=RealDictCursor
     )
 
+
 def sanitize_input(value: str) -> str:
     """Escape HTML characters to prevent injection attacks."""
     return html.escape(value.strip())
 
+
 def validate_form(data):
-    """Validate and sanitize incoming form fields."""
+    """
+    Validate and sanitize incoming form fields.
+    Returns a tuple (sanitized_data_dict, errors_dict).
+    """
     errors = {}
+    sanitized = {}
 
     # ---------- Name ----------
     name_raw = data.get('name', '')
     name = sanitize_input(name_raw)
     if not name:
         errors['name'] = 'Name is required.'
+    sanitized['name'] = name
 
     # ---------- Address ----------
     address_raw = data.get('address', '')
     address = sanitize_input(address_raw)
     if not address:
         errors['address'] = 'Address is required.'
+    sanitized['address'] = address
 
     # ---------- Phone ----------
     phone_raw = data.get('phone', '')
     phone = sanitize_input(phone_raw)
     if not re.fullmatch(r'\d{10}', phone):
         errors['phone'] = 'Phone number must be exactly 10 digits.'
+    sanitized['phone'] = phone
 
     # ---------- Date ----------
     date_raw = data.get('date', '')
@@ -71,6 +83,7 @@ def validate_form(data):
         datetime.strptime(date_str, '%Y-%m-%d')
     except ValueError:
         errors['date'] = 'Invalid date format. Expected YYYY-MM-DD.'
+    sanitized['date'] = date_str
 
     # ---------- Cost ----------
     cost_raw = data.get('cost', '')
@@ -81,6 +94,8 @@ def validate_form(data):
             raise ValueError
     except ValueError:
         errors['cost'] = 'Cost must be a number between 0 and 500.'
+        cost_val = None
+    sanitized['cost'] = cost_val
 
     # ---------- Remaining ----------
     remaining_raw = data.get('remaining', '')
@@ -93,102 +108,85 @@ def validate_form(data):
                 raise ValueError
         except ValueError:
             errors['remaining'] = 'Remaining credit must be a number between 0 and 500.'
+    sanitized['remaining'] = remaining_val
 
     # ---------- Previous (optional, read‑only) ----------
     previous_raw = data.get('previous', '')
     previous = sanitize_input(previous_raw)
     if len(previous) > 2000:
         errors['previous'] = 'Previous field exceeds maximum allowed length.'
+    sanitized['previous'] = previous
 
-    # Assemble cleaned data (only if no validation errors for those fields)
-    cleaned = {
-        'name': name,
-        'address': address,
-        'phone': phone,
-        'date': date_str,
-        'cost': cost_val if 'cost' not in errors else None,
-        'remaining': remaining_val,
-        'previous': previous
-    }
+    return sanitized, errors
 
-    return errors, cleaned
-
-def authenticate_request():
-    """Simple Bearer token authentication."""
-    auth_header = request.headers.get('Authorization', '')
-    if not auth_header.startswith('Bearer '):
-        return False
-    token = auth_header.split(' ', 1)[1]
-    return token == API_TOKEN
 
 # ----------------------------------------------------------------------
 # Routes
 # ----------------------------------------------------------------------
-@app.route('/', methods=['GET', 'POST'])
+@app.route('/', methods=['GET'])
 def serve_index():
-    """Serve the static index page and handle legacy form POSTs."""
-    if request.method == 'POST':
-        errors, cleaned = validate_form(request.form)
-        if errors:
-            return jsonify({'status': 'error', 'errors': errors}), 400
-        return jsonify({'status': 'success', 'data': cleaned}), 200
-
-    # GET – serve the static index.html
+    """Serve the main HTML page."""
     return send_from_directory(app.static_folder, 'index.html')
 
-@app.route('/health', methods=['GET'])
-def health():
-    """Health‑check endpoint."""
-    return jsonify({'status': 'ok'}), 200
 
-@app.route('/api/submit', methods=['POST'])
-def api_submit():
-    """Secure API endpoint that validates, sanitizes, and stores form data."""
-    # ---- Authentication ----
-    if not authenticate_request():
+@app.route('/submit', methods=['POST'])
+def submit_form():
+    """
+    Endpoint that receives the Bud Credit form, validates & sanitizes
+    the input, stores it safely, and returns a JSON response.
+    """
+    # Optional token authentication
+    auth_header = request.headers.get('Authorization')
+    if API_TOKEN and auth_header != f'Bearer {API_TOKEN}':
         return jsonify({'status': 'error', 'message': 'Unauthorized'}), 401
 
-    # ---- Validation ----
-    errors, cleaned = validate_form(request.form)
+    # Extract raw form data
+    data = request.form
+
+    # Validate & sanitize
+    sanitized, errors = validate_form(data)
+
     if errors:
         return jsonify({'status': 'error', 'errors': errors}), 400
 
-    # ---- Persistence ----
+    # Persist the sanitized data using a parameterised query
     try:
         conn = get_db_connection()
         cur = conn.cursor()
         insert_sql = """
             INSERT INTO submissions
-                (name, address, phone, submission_date, cost, remaining, previous)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-            RETURNING id;
+                (name, address, phone, date, cost, remaining, previous)
+            VALUES
+                (%s, %s, %s, %s, %s, %s, %s)
         """
         cur.execute(insert_sql, (
-            cleaned['name'],
-            cleaned['address'],
-            cleaned['phone'],
-            cleaned['date'],
-            cleaned['cost'],
-            cleaned['remaining'],
-            cleaned['previous']
+            sanitized['name'],
+            sanitized['address'],
+            sanitized['phone'],
+            sanitized['date'],
+            sanitized['cost'],
+            sanitized['remaining'],
+            sanitized['previous']
         ))
-        new_id = cur.fetchone()['id']
         conn.commit()
         cur.close()
         conn.close()
-    except Exception as e:
-        # In a real application you would log the exception details securely.
-        return jsonify({
-            'status': 'error',
-            'message': 'Database error',
-            'details': str(e)
-        }), 500
+    except Exception:
+        # In a production system you would log the exception details.
+        return jsonify({'status': 'error', 'message': 'Internal server error'}), 500
 
-    return jsonify({'status': 'success', 'id': new_id}), 201
+    return jsonify({'status': 'success', 'data': sanitized}), 200
+
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    """Simple health‑check endpoint."""
+    return jsonify({'status': 'ok'}), 200
+
 
 # ----------------------------------------------------------------------
 # Application entry point
 # ----------------------------------------------------------------------
 if __name__ == '__main__':
-    # Development server only; use a production WSGI server in real deployments.
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    # Bind to all interfaces for containerised deployments
+    app.run(host='0.0.0.0', port=5000)
