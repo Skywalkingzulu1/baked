@@ -1,27 +1,26 @@
-# Use official lightweight Python image
+# Use the official lightweight Python image
 FROM python:3.11-slim
 
-# Set working directory
+# Set working directory inside the container
 WORKDIR /app
 
-# Install system dependencies (if any) needed for building Python packages
+# Install any system dependencies required for building Python packages
+# (e.g., gcc and libpq-dev for psycopg2)
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends gcc && \
+    apt-get install -y --no-install-recommends gcc libpq-dev && \
     rm -rf /var/lib/apt/lists/*
 
-# Copy requirements and install Python dependencies
+# Copy only the requirements file first to leverage Docker cache
 COPY requirements.txt .
+
+# Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the rest of the application code
 COPY . .
 
-# Expose the port the Flask app runs on
+# Expose the Flask default port
 EXPOSE 5000
 
-# Set environment variables for Flask
-ENV FLASK_APP=app.py
-ENV FLASK_RUN_HOST=0.0.0.0
-
-# Run the Flask application
+# Default command to run the Flask app
 CMD ["python", "app.py"]
