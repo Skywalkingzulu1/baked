@@ -3,9 +3,9 @@ import os
 import re
 import html
 from datetime import datetime
+from dotenv import load_dotenv
 import psycopg2
 from psycopg2.extras import RealDictCursor
-from dotenv import load_dotenv
 
 # ----------------------------------------------------------------------
 # Load environment variables
@@ -23,9 +23,7 @@ DB_NAME = os.getenv('DB_NAME', 'bud_credit')
 DB_USER = os.getenv('DB_USER', 'postgres')
 DB_PASSWORD = os.getenv('DB_PASSWORD', '')
 
-# Simple token‑based authentication for the API endpoint (optional)
-API_TOKEN = os.getenv('API_TOKEN', 'changeme')  # replace with a strong secret
-
+API_TOKEN = os.getenv('API_TOKEN', 'changeme')  # optional token for API auth
 
 # ----------------------------------------------------------------------
 # Helper utilities
@@ -43,14 +41,13 @@ def get_db_connection():
 
 
 def sanitize_input(value: str) -> str:
-    """Escape HTML characters to prevent injection attacks."""
+    """Escape HTML characters to prevent injection attacks and trim whitespace."""
     return html.escape(value.strip())
 
 
 def validate_form(data):
-    """
-    Validate and sanitize incoming form fields.
-    Returns a tuple (sanitized_data_dict, errors_dict).
+    """Validate and sanitize incoming form fields.
+    Returns a tuple (sanitized_dict, errors_dict).
     """
     errors = {}
     sanitized = {}
@@ -61,6 +58,16 @@ def validate_form(data):
     if not name:
         errors['name'] = 'Name is required.'
     sanitized['name'] = name
+
+    # ---------- Email ----------
+    email_raw = data.get('email', '')
+    email = sanitize_input(email_raw)
+    email_regex = r'^[^@\s]+@[^@\s]+\.[^@\s]+$'
+    if not email:
+        errors['email'] = 'Email is required.'
+    elif not re.fullmatch(email_regex, email):
+        errors['email'] = 'Invalid email format.'
+    sanitized['email'] = email
 
     # ---------- Address ----------
     address_raw = data.get('address', '')
@@ -85,7 +92,7 @@ def validate_form(data):
         errors['date'] = 'Invalid date format. Expected YYYY-MM-DD.'
     sanitized['date'] = date_str
 
-    # ---------- Cost ----------
+    # ---------- Cost (Credit Amount) ----------
     cost_raw = data.get('cost', '')
     cost_str = cost_raw.strip()
     try:
@@ -97,7 +104,7 @@ def validate_form(data):
         cost_val = None
     sanitized['cost'] = cost_val
 
-    # ---------- Remaining ----------
+    # ---------- Remaining (optional) ----------
     remaining_raw = data.get('remaining', '')
     remaining_str = remaining_raw.strip()
     remaining_val = None
@@ -119,74 +126,37 @@ def validate_form(data):
 
     return sanitized, errors
 
-
 # ----------------------------------------------------------------------
 # Routes
 # ----------------------------------------------------------------------
 @app.route('/', methods=['GET'])
 def serve_index():
-    """Serve the main HTML page."""
+    """Serve the main page (index.html)."""
     return send_from_directory(app.static_folder, 'index.html')
-
 
 @app.route('/submit', methods=['POST'])
 def submit_form():
+    """Validate, sanitize and return the form data.
+    If validation fails, a JSON payload with an "errors" key is returned.
+    On success, a JSON payload with "data" containing the sanitized values is returned.
     """
-    Endpoint that receives the Bud Credit form, validates & sanitizes
-    the input, stores it safely, and returns a JSON response.
-    """
-    # Optional token authentication
-    auth_header = request.headers.get('Authorization')
-    if API_TOKEN and auth_header != f'Bearer {API_TOKEN}':
-        return jsonify({'status': 'error', 'message': 'Unauthorized'}), 401
+    # Optional token check – can be removed if not needed
+    token = request.headers.get('Authorization')
+    if API_TOKEN and token != f'Bearer {API_TOKEN}':
+        return jsonify({'error': 'Unauthorized'}), 401
 
-    # Extract raw form data
-    data = request.form
-
-    # Validate & sanitize
-    sanitized, errors = validate_form(data)
-
+    sanitized, errors = validate_form(request.form)
     if errors:
         return jsonify({'status': 'error', 'errors': errors}), 400
-
-    # Persist the sanitized data using a parameterised query
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        insert_sql = """
-            INSERT INTO submissions
-                (name, address, phone, date, cost, remaining, previous)
-            VALUES
-                (%s, %s, %s, %s, %s, %s, %s)
-        """
-        cur.execute(insert_sql, (
-            sanitized['name'],
-            sanitized['address'],
-            sanitized['phone'],
-            sanitized['date'],
-            sanitized['cost'],
-            sanitized['remaining'],
-            sanitized['previous']
-        ))
-        conn.commit()
-        cur.close()
-        conn.close()
-    except Exception:
-        # In a production system you would log the exception details.
-        return jsonify({'status': 'error', 'message': 'Internal server error'}), 500
-
     return jsonify({'status': 'success', 'data': sanitized}), 200
 
-
+# ----------------------------------------------------------------------
+# Health check endpoint (useful for orchestration)
+# ----------------------------------------------------------------------
 @app.route('/health', methods=['GET'])
 def health_check():
-    """Simple health‑check endpoint."""
     return jsonify({'status': 'ok'}), 200
 
-
-# ----------------------------------------------------------------------
-# Application entry point
-# ----------------------------------------------------------------------
 if __name__ == '__main__':
-    # Bind to all interfaces for containerised deployments
-    app.run(host='0.0.0.0', port=5000)
+    # Run in debug mode only for local development
+    app.run(host='0.0.0.0', port=5000, debug=True)
