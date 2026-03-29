@@ -1,7 +1,6 @@
 from flask import Flask, request, send_from_directory, jsonify
-import os
-import re
 import html
+import re
 from datetime import datetime
 
 app = Flask(__name__, static_folder='static', static_url_path='')
@@ -19,29 +18,25 @@ def validate_form(data):
     sanitized = {}
 
     # Name
-    name_raw = data.get('name', '')
-    name = sanitize_input(name_raw)
+    name = sanitize_input(data.get('name', ''))
     if not name:
         errors['name'] = 'Name is required.'
     sanitized['name'] = name
 
     # Address
-    address_raw = data.get('address', '')
-    address = sanitize_input(address_raw)
+    address = sanitize_input(data.get('address', ''))
     if not address:
         errors['address'] = 'Address is required.'
     sanitized['address'] = address
 
     # Phone
-    phone_raw = data.get('phone', '')
-    phone = sanitize_input(phone_raw)
+    phone = sanitize_input(data.get('phone', ''))
     if not re.fullmatch(r'\d{10}', phone):
         errors['phone'] = 'Phone number must be exactly 10 digits.'
     sanitized['phone'] = phone
 
     # Date
-    date_raw = data.get('date', '')
-    date_str = date_raw.strip()
+    date_str = data.get('date', '').strip()
     try:
         datetime.strptime(date_str, '%Y-%m-%d')
     except ValueError:
@@ -49,10 +44,9 @@ def validate_form(data):
     sanitized['date'] = date_str
 
     # Cost
-    cost_raw = data.get('cost', '')
-    cost_str = cost_raw.strip()
+    cost_raw = data.get('cost', '').strip()
     try:
-        cost_val = float(cost_str)
+        cost_val = float(cost_raw)
         if not (0 <= cost_val <= 500):
             raise ValueError
     except ValueError:
@@ -61,12 +55,11 @@ def validate_form(data):
     sanitized['cost'] = cost_val
 
     # Remaining (optional)
-    remaining_raw = data.get('remaining', '')
-    remaining_str = remaining_raw.strip()
+    remaining_raw = data.get('remaining', '').strip()
     remaining_val = None
-    if remaining_str:
+    if remaining_raw:
         try:
-            remaining_val = float(remaining_str)
+            remaining_val = float(remaining_raw)
             if not (0 <= remaining_val <= 500):
                 raise ValueError
         except ValueError:
@@ -74,8 +67,7 @@ def validate_form(data):
     sanitized['remaining'] = remaining_val
 
     # Previous (optional, read‑only)
-    previous_raw = data.get('previous', '')
-    previous = sanitize_input(previous_raw)
+    previous = sanitize_input(data.get('previous', ''))
     if len(previous) > 2000:
         errors['previous'] = 'Previous field exceeds maximum allowed length.'
     sanitized['previous'] = previous
@@ -90,19 +82,13 @@ def serve_index():
 @app.route('/submit', methods=['POST'])
 def submit_form():
     """Validate, sanitize and echo back the form data."""
-    data = request.form
-    sanitized, errors = validate_form(data)
+    sanitized, errors = validate_form(request.form)
 
     if errors:
         return jsonify({'status': 'error', 'errors': errors}), 400
 
-    # In this lightweight version we simply return the sanitized payload.
+    # In a real application you would store the sanitized data securely.
     return jsonify({'status': 'success', 'data': sanitized}), 200
-
-@app.route('/health', methods=['GET'])
-def health():
-    """Health‑check endpoint."""
-    return jsonify({'status': 'ok'}), 200
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
