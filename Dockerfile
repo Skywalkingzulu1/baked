@@ -1,28 +1,35 @@
-# Use official lightweight Python image
-FROM python:3.11-slim
-
-# Prevent Python from writing .pyc files and enable unbuffered output
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
+# ---------- Builder Stage ----------
+FROM python:3.11-slim AS builder
 
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies required for building Python packages (e.g., psycopg2)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
-    libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
+# Install build dependencies (if any) and pip packages
+# Using --no-cache-dir to keep image small
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Install Python dependencies
-COPY requirements.txt .
-RUN pip install --upgrade pip && pip install -r requirements.txt
+# Copy application source code
+COPY . ./
 
-# Copy the rest of the application code
-COPY . .
+# ---------- Runtime Stage ----------
+FROM python:3.11-slim
 
-# Expose the Flask default port
+# Set environment variables
+ENV PYTHONUNBUFFERED=1 \
+    FLASK_APP=app.py \
+    FLASK_RUN_HOST=0.0.0.0 \
+    PORT=5000
+
+# Set working directory
+WORKDIR /app
+
+# Copy only the installed packages and application code from builder
+COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=builder /app /app
+
+# Expose the port the Flask app runs on
 EXPOSE 5000
 
-# Use Gunicorn as the WSGI server to run the Flask app
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "app:app"]
+# Use gunicorn as the production server
+CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:5000", "app:app"]
