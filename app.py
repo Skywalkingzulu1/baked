@@ -59,14 +59,13 @@ def validate_form(data):
         errors['name'] = 'Name is required.'
     sanitized['name'] = name
 
-    # ---------- Email ----------
+    # ---------- Email (optional) ----------
     email_raw = data.get('email', '')
     email = sanitize_input(email_raw)
-    email_regex = r'^[^@\s]+@[^@\s]+\.[^@\s]+$'
-    if not email:
-        errors['email'] = 'Email is required.'
-    elif not re.fullmatch(email_regex, email):
-        errors['email'] = 'Invalid email format.'
+    if email:
+        email_regex = r'^[^@\s]+@[^@\s]+\.[^@\s]+$'
+        if not re.fullmatch(email_regex, email):
+            errors['email'] = 'Invalid email format.'
     sanitized['email'] = email
 
     # ---------- Address ----------
@@ -92,7 +91,7 @@ def validate_form(data):
         errors['date'] = 'Invalid date format. Expected YYYY-MM-DD.'
     sanitized['date'] = date_str
 
-    # ---------- Cost (Credit Amount) ----------
+    # ---------- Cost ----------
     cost_raw = data.get('cost', '')
     cost_str = cost_raw.strip()
     try:
@@ -126,37 +125,38 @@ def validate_form(data):
 
     return sanitized, errors
 
+
 # ----------------------------------------------------------------------
 # Routes
 # ----------------------------------------------------------------------
 @app.route('/', methods=['GET'])
 def serve_index():
-    """Serve the main page (index.html)."""
+    """Serve the main page."""
     return send_from_directory(app.static_folder, 'index.html')
+
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    """Simple health‑check endpoint."""
+    return jsonify({'status': 'ok'})
+
 
 @app.route('/submit', methods=['POST'])
 def submit_form():
-    """Validate, sanitize and return the form data.
-    If validation fails, a JSON payload with an "errors" key is returned.
-    On success, a JSON payload with "data" containing the sanitized values is returned.
-    """
-    # Optional token check – can be removed if not needed
-    token = request.headers.get('Authorization')
-    if API_TOKEN and token != f'Bearer {API_TOKEN}':
-        return jsonify({'error': 'Unauthorized'}), 401
+    """Validate, sanitize and return the form data."""
+    data = request.form
+    sanitized, errors = validate_form(data)
 
-    sanitized, errors = validate_form(request.form)
     if errors:
         return jsonify({'status': 'error', 'errors': errors}), 400
+
+    # Here you could persist the sanitized data to the database.
+    # For now we simply echo it back.
     return jsonify({'status': 'success', 'data': sanitized}), 200
 
-# ----------------------------------------------------------------------
-# Health check endpoint (useful for orchestration)
-# ----------------------------------------------------------------------
-@app.route('/health', methods=['GET'])
-def health_check():
-    return jsonify({'status': 'ok'}), 200
 
+# ----------------------------------------------------------------------
+# Application entry point
+# ----------------------------------------------------------------------
 if __name__ == '__main__':
-    # Run in debug mode only for local development
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=5000)
