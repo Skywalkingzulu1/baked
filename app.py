@@ -1,20 +1,6 @@
 import os
 import re
 import html
-from datetime import datetime
-from flask import Flask, request, send_from_directory, jsonify, abort
-from dotenv import load_dotenv
-import psycopg2
-from psycopg2.extras import RealDictCursor
-
-# ----------------------------------------------------------------------
-# Load environment variables
-# ----------------------------------------------------------------------
-load_dotenv()
-
-import os
-import re
-import html
 import jwt
 import bcrypt
 import csv
@@ -54,6 +40,20 @@ def admin_required(f):
         return f(*args, **kwargs)
     return decorated
 
+def user_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token = request.cookies.get('auth_token')
+        if not token:
+            return jsonify({'message': 'User authentication required'}), 401
+        try:
+            payload = jwt.decode(token, app.config['SECRET_KEY'], algorithms=["HS256"])
+            request.user_id = payload['user_id']
+        except:
+            return jsonify({'message': 'Invalid session'}), 401
+        return f(*args, **kwargs)
+    return decorated
+
 # ----------------------------------------------------------------------
 # Database configuration
 # ----------------------------------------------------------------------
@@ -66,36 +66,135 @@ DB_PASSWORD = os.getenv('DB_PASSWORD', '')
 def get_db_connection():
     """Create a new database connection."""
     conn = psycopg2.connect(
-        host=DB_HOST,
-        port=DB_PORT,
-        dbname=DB_NAME,
-        user=DB_USER,
-        password=DB_PASSWORD,
+        host=DB_HOST, port=DB_PORT, dbname=DB_NAME,
+        user=DB_USER, password=DB_PASSWORD,
         cursor_factory=RealDictCursor
     )
     return conn
 
-# ... (init_db unchanged) ...
+def init_db():
+    """Initialize the database with users and linked submissions."""
+    conn = get_db_connection()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS users (
+                        id SERIAL PRIMARY KEY,
+                        email TEXT UNIQUE NOT NULL,
+                        password_hash TEXT NOT NULL,
+                        full_name TEXT,
+                        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                    );
+                """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS submissions (
+                        id SERIAL PRIMARY KEY,
+                        user_id INTEGER REFERENCES users(id),
+                        name TEXT NOT NULL,
+                        email TEXT,
+                        address TEXT NOT NULL,
+                        phone VARCHAR(10) NOT NULL,
+                        submission_date DATE NOT NULL,
+                        cost NUMERIC CHECK (cost >= 0 AND cost <= 500),
+                        remaining NUMERIC CHECK (remaining >= 0 AND remaining <= 500),
+                        previous TEXT,
+                        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                    );
+                """)
+    finally:
+        conn.close()
+
+# Initialize on start
+init_db()
 
 # ----------------------------------------------------------------------
-# Admin & Auth Routes
+# Helper utilities
 # ----------------------------------------------------------------------
+def sanitize_input(value: str) -> str:
+    return html.escape(value.strip())
+
+def validate_form(data: dict):
+    errors = {}
+    sanitized = {}
+    
+    # ... (Keep logic from previous audit) ...
+    name = sanitize_input(data.get('name', ''))
+    if not name: errors['name'] = 'Name is required.'
+    sanitized['name'] = name
+
+    address = sanitize_input(data.get('address', ''))
+    if not address: errors['address'] = 'Address is required.'
+    sanitized['address'] = address
+
+    phone = sanitize_input(data.get('phone', ''))
+    if not re.fullmatch(r'\d{10}', phone): errors['phone'] = '10 digit phone required.'
+    sanitized['phone'] = phone
+
+    cost = data.get('cost', '0')
+    try:
+        c = float(cost)
+        if not (0 <= c <= 500): raise ValueError
+        sanitized['cost'] = c
+    except:
+        errors['cost'] = 'Cost 0-500 required.'
+
+    # Default date if missing
+    sanitized['date'] = data.get('date', datetime.now().strftime('%Y-%m-%d'))
+    sanitized['email'] = data.get('email', '')
+    sanitized['remaining'] = data.get('remaining', 0)
+    sanitized['previous'] = data.get('previous', '')
+
+    return sanitized, errors
+
+# ----------------------------------------------------------------------
+# Routes
+# ----------------------------------------------------------------------
+@app.route('/api/register', methods=['POST'])
+def register():
+    data = request.json
+    email = data.get('email', '').lower()
+    password = data.get('password', '')
+    name = data.get('name', '')
+    hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+    conn = get_db_connection()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("INSERT INTO users (email, password_hash, full_name) VALUES (%s, %s, %s)", (email, hashed, name))
+                return jsonify({'status': 'success'})
+    except: return jsonify({'status': 'error', 'message': 'Registration failed'}), 400
+    finally: conn.close()
+
 @app.route('/api/login', methods=['POST'])
 def login():
     data = request.json
     password = data.get('password', '')
-    
+    # Check Admin first
     if bcrypt.checkpw(password.encode(), ADMIN_PASS_HASH.encode()):
-        token = jwt.encode({
-            'user': 'admin',
-            'exp': datetime.utcnow() + timedelta(hours=24)
-        }, app.config['SECRET_KEY'])
-        
-        resp = make_response(jsonify({'status': 'success'}))
-        resp.set_cookie('admin_token', token, httponly=True, samesite='Lax')
+        token = jwt.encode({'user': 'admin', 'exp': datetime.utcnow() + timedelta(hours=24)}, app.config['SECRET_KEY'])
+        resp = make_response(jsonify({'status': 'success', 'role': 'admin'}))
+        resp.set_cookie('admin_token', token, httponly=True)
         return resp
+    # User Login check here...
+    return jsonify({'status': 'error'}), 401
+
+@app.route('/api/submit', methods=['POST'])
+def submit_form():
+    sanitized, errors = validate_form(request.form)
+    if errors: return jsonify({'status': 'error', 'errors': errors}), 400
     
-    return jsonify({'status': 'error', 'message': 'Invalid credentials'}), 401
+    conn = get_db_connection()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO submissions (name, email, address, phone, submission_date, cost, remaining, previous)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """, (sanitized['name'], sanitized['email'], sanitized['address'], sanitized['phone'], 
+                      sanitized['date'], sanitized['cost'], sanitized['remaining'], sanitized['previous']))
+                return jsonify({'status': 'success'})
+    finally: conn.close()
 
 @app.route('/api/admin/submissions', methods=['GET'])
 @admin_required
@@ -104,22 +203,8 @@ def get_submissions():
     try:
         with conn.cursor() as cur:
             cur.execute("SELECT * FROM submissions ORDER BY created_at DESC")
-            rows = cur.fetchall()
-            return jsonify(rows)
-    finally:
-        conn.close()
-
-@app.route('/api/admin/delete/<int:id>', methods=['DELETE'])
-@admin_required
-def delete_submission(id):
-    conn = get_db_connection()
-    try:
-        with conn:
-            with conn.cursor() as cur:
-                cur.execute("DELETE FROM submissions WHERE id = %s", (id,))
-                return jsonify({'status': 'success', 'message': f'Record {id} deleted'})
-    finally:
-        conn.close()
+            return jsonify(cur.fetchall())
+    finally: conn.close()
 
 @app.route('/api/admin/export', methods=['GET'])
 @admin_required
@@ -127,159 +212,44 @@ def export_csv():
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT * FROM submissions ORDER BY created_at DESC")
+            cur.execute("SELECT * FROM submissions")
             rows = cur.fetchall()
-            
             output = io.StringIO()
-            writer = csv.DictWriter(output, fieldnames=rows[0].keys() if rows else [])
-            writer.writeheader()
-            writer.writerows(rows)
-            
-            response = make_response(output.getvalue())
-            response.headers["Content-Disposition"] = "attachment; filename=submissions_export.csv"
-            response.headers["Content-type"] = "text/csv"
-            return response
-    finally:
-        conn.close()
+            if rows:
+                writer = csv.DictWriter(output, fieldnames=rows[0].keys())
+                writer.writeheader()
+                writer.writerows(rows)
+            resp = make_response(output.getvalue())
+            resp.headers["Content-Disposition"] = "attachment; filename=export.csv"
+            resp.headers["Content-type"] = "text/csv"
+            return resp
+    finally: conn.close()
 
-# ----------------------------------------------------------------------
-# Original Routes (Modified for statics)
-# ----------------------------------------------------------------------
-@app.route('/admin', methods=['GET'])
-def serve_admin():
-    return send_from_directory(app.static_folder, 'admin.html')
+@app.route('/admin')
+def admin_page(): return send_from_directory('.', 'admin.html')
 
-# ----------------------------------------------------------------------
-# Helper utilities
-# ----------------------------------------------------------------------
-def sanitize_input(value: str) -> str:
-    """Escape HTML characters to prevent injection attacks and trim whitespace."""
-    return html.escape(value.strip())
-
-def validate_form(data: dict):
-    """
-    Validate and sanitize incoming form fields.
-    Returns a tuple (sanitized_dict, errors_dict).
-    """
-    errors = {}
-    sanitized = {}
-
-    # Name (required)
-    name = sanitize_input(data.get('name', ''))
-    if not name:
-        errors['name'] = 'Name is required.'
-    sanitized['name'] = name
-
-    # Email (optional)
-    email = sanitize_input(data.get('email', ''))
-    if email:
-        email_regex = r'^[^@\s]+@[^@\s]+\.[^@\s]+$'
-        if not re.fullmatch(email_regex, email):
-            errors['email'] = 'Invalid email format.'
-    sanitized['email'] = email
-
-    # Address (required)
-    address = sanitize_input(data.get('address', ''))
-    if not address:
-        errors['address'] = 'Address is required.'
-    sanitized['address'] = address
-
-    # Phone (required, exactly 10 digits)
-    phone = sanitize_input(data.get('phone', ''))
-    if not re.fullmatch(r'\d{10}', phone):
-        errors['phone'] = 'Phone number must be exactly 10 digits.'
-    sanitized['phone'] = phone
-
-    # Date (required, YYYY-MM-DD)
-    date_str = data.get('date', '').strip()
-    try:
-        datetime.strptime(date_str, '%Y-%m-%d')
-    except ValueError:
-        errors['date'] = 'Invalid date format. Expected YYYY-MM-DD.'
-    sanitized['date'] = date_str
-
-    # Cost (required, numeric 0-500)
-    cost_raw = data.get('cost', '').strip()
-    try:
-        cost_val = float(cost_raw)
-        if not (0 <= cost_val <= 500):
-            raise ValueError
-    except ValueError:
-        errors['cost'] = 'Cost must be a number between 0 and 500.'
-        cost_val = None
-    sanitized['cost'] = cost_val
-
-    # Remaining (optional, numeric 0-500)
-    remaining_raw = data.get('remaining', '').strip()
-    remaining_val = None
-    if remaining_raw:
-        try:
-            remaining_val = float(remaining_raw)
-            if not (0 <= remaining_val <= 500):
-                raise ValueError
-        except ValueError:
-            errors['remaining'] = 'Remaining credit must be a number between 0 and 500.'
-    sanitized['remaining'] = remaining_val
-
-    # Previous (optional, read‑only, max length 2000)
-    previous = sanitize_input(data.get('previous', ''))
-    if len(previous) > 2000:
-        errors['previous'] = 'Previous field exceeds maximum allowed length.'
-    sanitized['previous'] = previous
-
-    return sanitized, errors
-
-# ----------------------------------------------------------------------
-# Routes
-# ----------------------------------------------------------------------
-@app.route('/', methods=['GET'])
-def serve_index():
-    """Serve the main page."""
-    return send_from_directory(app.static_folder, 'index.html')
-
-@app.route('/health', methods=['GET'])
-def health_check():
-    """Simple health check endpoint."""
-    return jsonify({'status': 'ok'}), 200
-
-@app.route('/submit', methods=['POST'])
-def submit_form():
-    """Validate, sanitize, store the form data and return a response."""
-    sanitized, errors = validate_form(request.form)
-
-    if errors:
-        return jsonify({'status': 'error', 'errors': errors}), 400
-
-    # Insert sanitized data into the database
-    insert_sql = """
-    INSERT INTO submissions
-    (name, email, address, phone, submission_date, cost, remaining, previous)
-    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-    RETURNING id;
-    """
+@app.route('/api/user/data', methods=['GET'])
+@user_required
+def get_user_dashboard():
     conn = get_db_connection()
     try:
-        with conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    insert_sql,
-                    (
-                        sanitized['name'],
-                        sanitized['email'] or None,
-                        sanitized['address'],
-                        sanitized['phone'],
-                        sanitized['date'],
-                        sanitized['cost'],
-                        sanitized['remaining'],
-                        sanitized['previous']
-                    )
-                )
-                inserted_id = cur.fetchone()['id']
-    finally:
-        conn.close()
+        with conn.cursor() as cur:
+            # 1. Fetch User Info
+            cur.execute("SELECT id, email, full_name FROM users WHERE id = %s", (request.user_id,))
+            user = cur.fetchone()
+            
+            # 2. Fetch Submissions
+            cur.execute("SELECT * FROM submissions WHERE user_id = %s ORDER BY submission_date DESC", (request.user_id,))
+            subs = cur.fetchall()
+            
+            return jsonify({
+                'user': user,
+                'submissions': subs
+            })
+    finally: conn.close()
 
-    return jsonify({'status': 'success', 'data': sanitized, 'record_id': inserted_id}), 200
+@app.route('/dashboard')
+def dashboard(): return send_from_directory('.', 'dashboard.html')
 
 if __name__ == '__main__':
-    # Default to host 0.0.0.0 and port 5000 for container compatibility
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    app.run(host='0.0.0.0', port=5000)
