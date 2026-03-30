@@ -95,7 +95,7 @@ def validate_form(data: dict):
         email_regex = r'^[^@\s]+@[^@\s]+\.[^@\s]+$'
         if not re.fullmatch(email_regex, email):
             errors['email'] = 'Invalid email format.'
-    sanitized['email'] = email
+    sanitized['email'] = email if email else None
 
     # ---------- Address ----------
     address = sanitize_input(data.get('address', ''))
@@ -116,7 +116,7 @@ def validate_form(data: dict):
     except ValueError:
         errors['date'] = 'Invalid date format. Expected YYYY-MM-DD.'
         date_obj = None
-    sanitized['date'] = date_obj
+    sanitized['date'] = date_obj.isoformat() if date_obj else None
 
     # ---------- Cost ----------
     cost_raw = data.get('cost', '').strip()
@@ -149,13 +149,33 @@ def validate_form(data: dict):
 
     return sanitized, errors
 
-def insert_submission(sanitized: dict):
-    """Insert a validated submission into the database."""
+# ----------------------------------------------------------------------
+# Routes
+# ----------------------------------------------------------------------
+@app.route('/', methods=['GET'])
+def serve_index():
+    """Serve the main page."""
+    return send_from_directory(app.static_folder, 'index.html')
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    """Simple health check endpoint."""
+    return jsonify({'status': 'ok'}), 200
+
+@app.route('/submit', methods=['POST'])
+def submit_form():
+    """Validate, sanitize, store the form data and return a response."""
+    sanitized, errors = validate_form(request.form)
+
+    if errors:
+        return jsonify({'status': 'error', 'errors': errors}), 400
+
+    # Store sanitized data securely using parameterized queries
     insert_sql = """
-    INSERT INTO submissions
-    (name, email, address, phone, submission_date, cost, remaining, previous)
-    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-    RETURNING id;
+        INSERT INTO submissions
+        (name, email, address, phone, submission_date, cost, remaining, previous)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        RETURNING id;
     """
     conn = get_db_connection()
     try:
@@ -165,55 +185,29 @@ def insert_submission(sanitized: dict):
                     insert_sql,
                     (
                         sanitized['name'],
-                        sanitized['email'] or None,
+                        sanitized['email'],
                         sanitized['address'],
                         sanitized['phone'],
                         sanitized['date'],
                         sanitized['cost'],
                         sanitized['remaining'],
-                        sanitized['previous'] or None
+                        sanitized['previous']
                     )
                 )
                 inserted_id = cur.fetchone()['id']
-                return inserted_id
     finally:
         conn.close()
 
-# ----------------------------------------------------------------------
-# Routes
-# ----------------------------------------------------------------------
-@app.route('/', methods=['GET'])
-def serve_index():
-    """Serve the main page."""
-    return send_from_directory(app.static_folder, 'index.html')
-
-@app.route('/submit', methods=['POST'])
-def submit_form():
-    """Validate, sanitize, store (if valid) and return the form data."""
-    sanitized, errors = validate_form(request.form)
-
-    if errors:
-        return jsonify({'status': 'error', 'errors': errors}), 400
-
-    # Store the sanitized data in the database
-    try:
-        record_id = insert_submission(sanitized)
-    except Exception as e:
-        # Log the exception in a real application; here we return a generic error.
-        return jsonify({'status': 'error', 'message': 'Database error.'}), 500
-
-    # Return success response with stored record ID
-    response_data = sanitized.copy()
-    response_data['id'] = record_id
-    return jsonify({'status': 'success', 'data': response_data}), 200
+    response_payload = {
+        'status': 'success',
+        'data': sanitized,
+        'record_id': inserted_id
+    }
+    return jsonify(response_payload), 200
 
 # ----------------------------------------------------------------------
-# Health check endpoint
+# Application entry point
 # ----------------------------------------------------------------------
-@app.route('/health', methods=['GET'])
-def health_check():
-    return jsonify({'status': 'ok'}), 200
-
 if __name__ == '__main__':
-    # Default to host 0.0.0.0 and port 5000 for container compatibility
+    # Bind to all interfaces for container usage
     app.run(host='0.0.0.0', port=int(os.getenv('PORT', 5000)), debug=False)
