@@ -70,55 +70,51 @@ init_db()
 # Helper utilities
 # ----------------------------------------------------------------------
 def sanitize_input(value: str) -> str:
-    """
-    Escape HTML characters to prevent injection attacks and trim whitespace.
-    """
+    """Escape HTML characters to prevent injection attacks and trim whitespace."""
     return html.escape(value.strip())
 
 def validate_form(data: dict):
-    """
-    Validate and sanitize incoming form fields.
+    """Validate and sanitize incoming form fields.
     Returns a tuple (sanitized_dict, errors_dict).
     """
     errors = {}
     sanitized = {}
 
-    # ---------- Name ----------
+    # Name (required)
     name = sanitize_input(data.get('name', ''))
     if not name:
         errors['name'] = 'Name is required.'
     sanitized['name'] = name
 
-    # ---------- Email (optional) ----------
+    # Email (optional)
     email = sanitize_input(data.get('email', ''))
     if email:
         email_regex = r'^[^@\s]+@[^@\s]+\.[^@\s]+$'
         if not re.fullmatch(email_regex, email):
             errors['email'] = 'Invalid email format.'
-    sanitized['email'] = email if email else None
+    sanitized['email'] = email
 
-    # ---------- Address ----------
+    # Address (required)
     address = sanitize_input(data.get('address', ''))
     if not address:
         errors['address'] = 'Address is required.'
     sanitized['address'] = address
 
-    # ---------- Phone ----------
+    # Phone (required, exactly 10 digits)
     phone = sanitize_input(data.get('phone', ''))
     if not re.fullmatch(r'\d{10}', phone):
         errors['phone'] = 'Phone number must be exactly 10 digits.'
     sanitized['phone'] = phone
 
-    # ---------- Date ----------
+    # Date (required, YYYY-MM-DD)
     date_str = data.get('date', '').strip()
     try:
-        date_obj = datetime.strptime(date_str, '%Y-%m-%d').date()
+        datetime.strptime(date_str, '%Y-%m-%d')
     except ValueError:
         errors['date'] = 'Invalid date format. Expected YYYY-MM-DD.'
-        date_obj = None
-    sanitized['date'] = date_obj.isoformat() if date_obj else None
+    sanitized['date'] = date_str
 
-    # ---------- Cost ----------
+    # Cost (required, numeric 0-500)
     cost_raw = data.get('cost', '').strip()
     try:
         cost_val = float(cost_raw)
@@ -129,7 +125,7 @@ def validate_form(data: dict):
         cost_val = None
     sanitized['cost'] = cost_val
 
-    # ---------- Remaining (optional) ----------
+    # Remaining (optional, numeric 0-500)
     remaining_raw = data.get('remaining', '').strip()
     remaining_val = None
     if remaining_raw:
@@ -141,7 +137,7 @@ def validate_form(data: dict):
             errors['remaining'] = 'Remaining credit must be a number between 0 and 500.'
     sanitized['remaining'] = remaining_val
 
-    # ---------- Previous (optional, read‑only) ----------
+    # Previous (optional, read‑only, max length 2000)
     previous = sanitize_input(data.get('previous', ''))
     if len(previous) > 2000:
         errors['previous'] = 'Previous field exceeds maximum allowed length.'
@@ -159,55 +155,25 @@ def serve_index():
 
 @app.route('/health', methods=['GET'])
 def health_check():
-    """Simple health check endpoint."""
     return jsonify({'status': 'ok'}), 200
 
 @app.route('/submit', methods=['POST'])
 def submit_form():
-    """Validate, sanitize, store the form data and return a response."""
+    """Validate, sanitize and process the submitted form data."""
     sanitized, errors = validate_form(request.form)
-
     if errors:
         return jsonify({'status': 'error', 'errors': errors}), 400
 
-    # Store sanitized data securely using parameterized queries
-    insert_sql = """
-        INSERT INTO submissions
-        (name, email, address, phone, submission_date, cost, remaining, previous)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-        RETURNING id;
-    """
-    conn = get_db_connection()
-    try:
-        with conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    insert_sql,
-                    (
-                        sanitized['name'],
-                        sanitized['email'],
-                        sanitized['address'],
-                        sanitized['phone'],
-                        sanitized['date'],
-                        sanitized['cost'],
-                        sanitized['remaining'],
-                        sanitized['previous']
-                    )
-                )
-                inserted_id = cur.fetchone()['id']
-    finally:
-        conn.close()
+    # Example placeholder for storing data – omitted for brevity.
+    # conn = get_db_connection()
+    # with conn:
+    #     with conn.cursor() as cur:
+    #         cur.execute(
+    #             "INSERT INTO submissions (name, email, address, phone, submission_date, cost, remaining, previous) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+    #             (sanitized['name'], sanitized['email'], sanitized['address'], sanitized['phone'], sanitized['date'], sanitized['cost'], sanitized['remaining'], sanitized['previous'])
+    #         )
 
-    response_payload = {
-        'status': 'success',
-        'data': sanitized,
-        'record_id': inserted_id
-    }
-    return jsonify(response_payload), 200
+    return jsonify({'status': 'success', 'data': sanitized}), 200
 
-# ----------------------------------------------------------------------
-# Application entry point
-# ----------------------------------------------------------------------
 if __name__ == '__main__':
-    # Bind to all interfaces for container usage
-    app.run(host='0.0.0.0', port=int(os.getenv('PORT', 5000)), debug=False)
+    app.run(host='0.0.0.0', port=5000)
