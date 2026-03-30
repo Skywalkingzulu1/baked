@@ -112,10 +112,11 @@ def validate_form(data: dict):
     # ---------- Date ----------
     date_str = data.get('date', '').strip()
     try:
-        datetime.strptime(date_str, '%Y-%m-%d')
+        date_obj = datetime.strptime(date_str, '%Y-%m-%d').date()
     except ValueError:
         errors['date'] = 'Invalid date format. Expected YYYY-MM-DD.'
-    sanitized['date'] = date_str
+        date_obj = None
+    sanitized['date'] = date_obj
 
     # ---------- Cost ----------
     cost_raw = data.get('cost', '').strip()
@@ -148,38 +149,13 @@ def validate_form(data: dict):
 
     return sanitized, errors
 
-# ----------------------------------------------------------------------
-# Routes
-# ----------------------------------------------------------------------
-@app.route('/', methods=['GET'])
-def serve_index():
-    """Serve the main page."""
-    return send_from_directory(app.static_folder, 'index.html')
-
-@app.route('/health', methods=['GET'])
-def health_check():
-    """Simple health check endpoint."""
-    return jsonify({'status': 'ok'}), 200
-
-@app.route('/submit', methods=['POST'])
-def submit_form():
-    """
-    Validate, sanitize, store the form data, and return a JSON response.
-    """
-    # Flask parses form data into ImmutableMultiDict; convert to regular dict
-    form_data = request.form.to_dict()
-    sanitized, errors = validate_form(form_data)
-
-    if errors:
-        return jsonify({'status': 'error', 'errors': errors}), 400
-
-    # Insert sanitized data into the database
+def insert_submission(sanitized: dict):
+    """Insert a validated submission into the database."""
     insert_sql = """
     INSERT INTO submissions
-        (name, email, address, phone, submission_date, cost, remaining, previous)
-    VALUES
-        (%s, %s, %s, %s, %s, %s, %s, %s)
-    RETURNING id, created_at;
+    (name, email, address, phone, submission_date, cost, remaining, previous)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+    RETURNING id;
     """
     conn = get_db_connection()
     try:
@@ -195,31 +171,49 @@ def submit_form():
                         sanitized['date'],
                         sanitized['cost'],
                         sanitized['remaining'],
-                        sanitized['previous']
+                        sanitized['previous'] or None
                     )
                 )
-                result = cur.fetchone()
-                submission_id = result['id']
-                created_at = result['created_at']
+                inserted_id = cur.fetchone()['id']
+                return inserted_id
     finally:
         conn.close()
 
-    response_payload = {
-        'status': 'success',
-        'data': {
-            'id': submission_id,
-            'created_at': created_at.isoformat(),
-            **sanitized
-        }
-    }
-    return jsonify(response_payload), 201
+# ----------------------------------------------------------------------
+# Routes
+# ----------------------------------------------------------------------
+@app.route('/', methods=['GET'])
+def serve_index():
+    """Serve the main page."""
+    return send_from_directory(app.static_folder, 'index.html')
+
+@app.route('/submit', methods=['POST'])
+def submit_form():
+    """Validate, sanitize, store (if valid) and return the form data."""
+    sanitized, errors = validate_form(request.form)
+
+    if errors:
+        return jsonify({'status': 'error', 'errors': errors}), 400
+
+    # Store the sanitized data in the database
+    try:
+        record_id = insert_submission(sanitized)
+    except Exception as e:
+        # Log the exception in a real application; here we return a generic error.
+        return jsonify({'status': 'error', 'message': 'Database error.'}), 500
+
+    # Return success response with stored record ID
+    response_data = sanitized.copy()
+    response_data['id'] = record_id
+    return jsonify({'status': 'success', 'data': response_data}), 200
 
 # ----------------------------------------------------------------------
-# Entry point
+# Health check endpoint
 # ----------------------------------------------------------------------
+@app.route('/health', methods=['GET'])
+def health_check():
+    return jsonify({'status': 'ok'}), 200
+
 if __name__ == '__main__':
-    # Use host and port from environment or defaults
-    host = os.getenv('FLASK_HOST', '0.0.0.0')
-    port = int(os.getenv('FLASK_PORT', '5000'))
-    debug = os.getenv('FLASK_DEBUG', 'false').lower() == 'true'
-    app.run(host=host, port=port, debug=debug)
+    # Default to host 0.0.0.0 and port 5000 for container compatibility
+    app.run(host='0.0.0.0', port=int(os.getenv('PORT', 5000)), debug=False)
