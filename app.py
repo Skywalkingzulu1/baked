@@ -164,14 +164,33 @@ def submit_form():
     if errors:
         return jsonify({'status': 'error', 'errors': errors}), 400
 
-    # Example placeholder for storing data – omitted for brevity.
-    # conn = get_db_connection()
-    # with conn:
-    #     with conn.cursor() as cur:
-    #         cur.execute(
-    #             "INSERT INTO submissions (name, email, address, phone, submission_date, cost, remaining, previous) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
-    #             (sanitized['name'], sanitized['email'], sanitized['address'], sanitized['phone'], sanitized['date'], sanitized['cost'], sanitized['remaining'], sanitized['previous'])
-    #         )
+    # Example: Insert into DB (optional, shown for completeness)
+    try:
+        conn = get_db_connection()
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO submissions (name, email, address, phone, submission_date, cost, remaining, previous)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        sanitized['name'],
+                        sanitized['email'] or None,
+                        sanitized['address'],
+                        sanitized['phone'],
+                        sanitized['date'],
+                        sanitized['cost'],
+                        sanitized['remaining'],
+                        sanitized['previous'] or None,
+                    )
+                )
+    except Exception as e:
+        # Log the exception in a real app; here we just return a generic error.
+        return jsonify({'status': 'error', 'message': 'Database error.'}), 500
+    finally:
+        if 'conn' in locals():
+            conn.close()
 
     return jsonify({'status': 'success', 'data': sanitized}), 200
 
