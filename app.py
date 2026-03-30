@@ -12,10 +12,47 @@ from psycopg2.extras import RealDictCursor
 # ----------------------------------------------------------------------
 load_dotenv()
 
+import os
+import re
+import html
+import jwt
+import bcrypt
+import csv
+import io
+from datetime import datetime, timedelta
+from functools import wraps
+from flask import Flask, request, send_from_directory, jsonify, abort, make_response
+from dotenv import load_dotenv
+import psycopg2
+from psycopg2.extras import RealDictCursor
+
+# ----------------------------------------------------------------------
+# Load environment variables
+# ----------------------------------------------------------------------
+load_dotenv()
+
 # ----------------------------------------------------------------------
 # Flask app configuration
 # ----------------------------------------------------------------------
-app = Flask(__name__, static_folder='static', static_url_path='')
+app = Flask(__name__, static_folder='.', static_url_path='')
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'baked_dev_secret_2026')
+ADMIN_PASS_HASH = os.getenv('ADMIN_PASS_HASH', bcrypt.hashpw(b"admin123", bcrypt.gensalt()).decode())
+
+# ----------------------------------------------------------------------
+# Security Helpers
+# ----------------------------------------------------------------------
+def admin_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token = request.cookies.get('admin_token')
+        if not token:
+            return jsonify({'message': 'Authentication required'}), 401
+        try:
+            jwt.decode(token, app.config['SECRET_KEY'], algorithms=["HS256"])
+        except:
+            return jsonify({'message': 'Invalid token'}), 401
+        return f(*args, **kwargs)
+    return decorated
 
 # ----------------------------------------------------------------------
 # Database configuration
@@ -38,32 +75,79 @@ def get_db_connection():
     )
     return conn
 
-def init_db():
-    """Initialize the submissions table if it does not exist."""
-    create_table_sql = """
-    CREATE TABLE IF NOT EXISTS submissions (
-        id SERIAL PRIMARY KEY,
-        name TEXT NOT NULL,
-        email TEXT,
-        address TEXT NOT NULL,
-        phone VARCHAR(10) NOT NULL,
-        submission_date DATE NOT NULL,
-        cost NUMERIC CHECK (cost >= 0 AND cost <= 500),
-        remaining NUMERIC CHECK (remaining >= 0 AND remaining <= 500),
-        previous TEXT,
-        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-    );
-    """
+# ... (init_db unchanged) ...
+
+# ----------------------------------------------------------------------
+# Admin & Auth Routes
+# ----------------------------------------------------------------------
+@app.route('/api/login', methods=['POST'])
+def login():
+    data = request.json
+    password = data.get('password', '')
+    
+    if bcrypt.checkpw(password.encode(), ADMIN_PASS_HASH.encode()):
+        token = jwt.encode({
+            'user': 'admin',
+            'exp': datetime.utcnow() + timedelta(hours=24)
+        }, app.config['SECRET_KEY'])
+        
+        resp = make_response(jsonify({'status': 'success'}))
+        resp.set_cookie('admin_token', token, httponly=True, samesite='Lax')
+        return resp
+    
+    return jsonify({'status': 'error', 'message': 'Invalid credentials'}), 401
+
+@app.route('/api/admin/submissions', methods=['GET'])
+@admin_required
+def get_submissions():
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM submissions ORDER BY created_at DESC")
+            rows = cur.fetchall()
+            return jsonify(rows)
+    finally:
+        conn.close()
+
+@app.route('/api/admin/delete/<int:id>', methods=['DELETE'])
+@admin_required
+def delete_submission(id):
     conn = get_db_connection()
     try:
         with conn:
             with conn.cursor() as cur:
-                cur.execute(create_table_sql)
+                cur.execute("DELETE FROM submissions WHERE id = %s", (id,))
+                return jsonify({'status': 'success', 'message': f'Record {id} deleted'})
     finally:
         conn.close()
 
-# Initialize DB on startup
-init_db()
+@app.route('/api/admin/export', methods=['GET'])
+@admin_required
+def export_csv():
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM submissions ORDER BY created_at DESC")
+            rows = cur.fetchall()
+            
+            output = io.StringIO()
+            writer = csv.DictWriter(output, fieldnames=rows[0].keys() if rows else [])
+            writer.writeheader()
+            writer.writerows(rows)
+            
+            response = make_response(output.getvalue())
+            response.headers["Content-Disposition"] = "attachment; filename=submissions_export.csv"
+            response.headers["Content-type"] = "text/csv"
+            return response
+    finally:
+        conn.close()
+
+# ----------------------------------------------------------------------
+# Original Routes (Modified for statics)
+# ----------------------------------------------------------------------
+@app.route('/admin', methods=['GET'])
+def serve_admin():
+    return send_from_directory(app.static_folder, 'admin.html')
 
 # ----------------------------------------------------------------------
 # Helper utilities
