@@ -1,7 +1,6 @@
 import os
 import re
 import html
-import json
 from datetime import datetime
 from flask import Flask, request, send_from_directory, jsonify, abort
 from dotenv import load_dotenv
@@ -138,7 +137,7 @@ def validate_form(data: dict):
             errors['remaining'] = 'Remaining credit must be a number between 0 and 500.'
     sanitized['remaining'] = remaining_val
 
-    # Previous (optional, read‑only, max length)
+    # Previous (optional, read‑only, max length 2000)
     previous = sanitize_input(data.get('previous', ''))
     if len(previous) > 2000:
         errors['previous'] = 'Previous field exceeds maximum allowed length.'
@@ -161,26 +160,23 @@ def health_check():
 
 @app.route('/submit', methods=['POST'])
 def submit_form():
-    """
-    Validate, sanitize, and (optionally) store the form data.
-    Returns JSON with status and either sanitized data or errors.
-    """
+    """Validate, sanitize, store the form data and return a response."""
     sanitized, errors = validate_form(request.form)
 
     if errors:
         return jsonify({'status': 'error', 'errors': errors}), 400
 
-    # Example: store the sanitized data in the database
+    # Insert sanitized data into the database
+    insert_sql = """
+    INSERT INTO submissions
+    (name, email, address, phone, submission_date, cost, remaining, previous)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+    RETURNING id;
+    """
+    conn = get_db_connection()
     try:
-        conn = get_db_connection()
         with conn:
             with conn.cursor() as cur:
-                insert_sql = """
-                INSERT INTO submissions
-                (name, email, address, phone, submission_date, cost, remaining, previous)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                RETURNING id;
-                """
                 cur.execute(
                     insert_sql,
                     (
@@ -194,20 +190,12 @@ def submit_form():
                         sanitized['previous']
                     )
                 )
-                new_id = cur.fetchone()['id']
-                sanitized['id'] = new_id
-    except Exception as e:
-        # Log the exception in a real app; here we just return a generic error.
-        return jsonify({'status': 'error', 'message': 'Database error.'}), 500
+                inserted_id = cur.fetchone()['id']
     finally:
-        if 'conn' in locals():
-            conn.close()
+        conn.close()
 
-    return jsonify({'status': 'success', 'data': sanitized}), 200
+    return jsonify({'status': 'success', 'data': sanitized, 'record_id': inserted_id}), 200
 
-# ----------------------------------------------------------------------
-# Application entry point
-# ----------------------------------------------------------------------
 if __name__ == '__main__':
-    # Bind to all interfaces for container usage
-    app.run(host='0.0.0.0', port=int(os.getenv('PORT', 5000)), debug=False)
+    # Default to host 0.0.0.0 and port 5000 for container compatibility
+    app.run(host='0.0.0.0', port=5000, debug=False)
