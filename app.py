@@ -74,7 +74,8 @@ def sanitize_input(value: str) -> str:
     return html.escape(value.strip())
 
 def validate_form(data: dict):
-    """Validate and sanitize incoming form fields.
+    """
+    Validate and sanitize incoming form fields.
     Returns a tuple (sanitized_dict, errors_dict).
     """
     errors = {}
@@ -109,10 +110,11 @@ def validate_form(data: dict):
     # Date (required, YYYY-MM-DD)
     date_str = data.get('date', '').strip()
     try:
-        datetime.strptime(date_str, '%Y-%m-%d')
+        date_obj = datetime.strptime(date_str, '%Y-%m-%d').date()
     except ValueError:
         errors['date'] = 'Invalid date format. Expected YYYY-MM-DD.'
-    sanitized['date'] = date_str
+        date_obj = None
+    sanitized['date'] = date_str  # keep original string for DB insertion
 
     # Cost (required, numeric 0-500)
     cost_raw = data.get('cost', '').strip()
@@ -137,7 +139,7 @@ def validate_form(data: dict):
             errors['remaining'] = 'Remaining credit must be a number between 0 and 500.'
     sanitized['remaining'] = remaining_val
 
-    # Previous (optional, read‑only, max length 2000)
+    # Previous (optional, read‑only)
     previous = sanitize_input(data.get('previous', ''))
     if len(previous) > 2000:
         errors['previous'] = 'Previous field exceeds maximum allowed length.'
@@ -146,7 +148,7 @@ def validate_form(data: dict):
     return sanitized, errors
 
 # ----------------------------------------------------------------------
-# Routes
+# Flask routes
 # ----------------------------------------------------------------------
 @app.route('/', methods=['GET'])
 def serve_index():
@@ -155,25 +157,30 @@ def serve_index():
 
 @app.route('/health', methods=['GET'])
 def health_check():
+    """Simple health check endpoint."""
     return jsonify({'status': 'ok'}), 200
 
 @app.route('/submit', methods=['POST'])
 def submit_form():
-    """Validate, sanitize and process the submitted form data."""
+    """Validate, sanitize, store (if valid) and return the form data."""
     sanitized, errors = validate_form(request.form)
+
     if errors:
         return jsonify({'status': 'error', 'errors': errors}), 400
 
-    # Example: Insert into DB (optional, shown for completeness)
+    # Store the sanitized data in the database
+    insert_sql = """
+        INSERT INTO submissions
+        (name, email, address, phone, submission_date, cost, remaining, previous)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        RETURNING id, created_at;
+    """
+    conn = get_db_connection()
     try:
-        conn = get_db_connection()
         with conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    """
-                    INSERT INTO submissions (name, email, address, phone, submission_date, cost, remaining, previous)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                    """,
+                    insert_sql,
                     (
                         sanitized['name'],
                         sanitized['email'] or None,
@@ -182,17 +189,19 @@ def submit_form():
                         sanitized['date'],
                         sanitized['cost'],
                         sanitized['remaining'],
-                        sanitized['previous'] or None,
+                        sanitized['previous']
                     )
                 )
-    except Exception as e:
-        # Log the exception in a real app; here we just return a generic error.
-        return jsonify({'status': 'error', 'message': 'Database error.'}), 500
+                result = cur.fetchone()
+                sanitized['id'] = result['id']
+                sanitized['created_at'] = result['created_at'].isoformat()
     finally:
-        if 'conn' in locals():
-            conn.close()
+        conn.close()
 
     return jsonify({'status': 'success', 'data': sanitized}), 200
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    # Default to host 0.0.0.0 and port from env or 5000
+    host = os.getenv('FLASK_HOST', '0.0.0.0')
+    port = int(os.getenv('FLASK_PORT', '5000'))
+    app.run(host=host, port=port, debug=False)
