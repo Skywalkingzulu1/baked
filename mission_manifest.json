@@ -1,0 +1,21 @@
+{
+  "name": "bud-credit-form",
+  "description": "A simple web application that allows users to submit credit-related information, with a Flask backend and static HTML frontend.",
+  "version": "1.0.0",
+  "entry_point": "app.py",
+  "dependencies": {
+    "python": ">=3.11",
+    "flask": "*",
+    "python-dotenv": "*",
+    "psycopg2-binary": "*",
+    "pyjwt": "*",
+    "bcrypt": "*"
+  },
+  "scripts": {
+    "start": "python app.py",
+    "test": "pytest"
+  },
+  "author": "Andile Sizophila Mchunu",
+  "email": "andilexmchunu@gmail.com",
+  "repository": "https://github.com/Skywalkingzulu1/bud-credit-form"
+}
